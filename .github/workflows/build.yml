@@ -1,0 +1,79 @@
+name: Build artifacts
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        run: ./gradlew :androidApp:assembleRelease --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicor-android-apk
+          path: androidApp/build/outputs/apk/release/*.apk
+
+  linux:
+    name: Linux (AppImage + deb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build AppImage and deb
+        run: ./gradlew :desktopApp:packageAppImage :desktopApp:packageDeb --no-daemon
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicor-linux
+          path: |
+            desktopApp/build/compose/binaries/main/**/*.AppImage
+            desktopApp/build/compose/binaries/main/**/*.deb
+
+  windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build EXE
+        run: .\gradlew.bat :desktopApp:packageExe --no-daemon
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicor-windows-exe
+          path: desktopApp/build/compose/binaries/main/**/*.exe
