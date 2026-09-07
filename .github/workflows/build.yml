@@ -46,16 +46,39 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Build AppImage and deb
+      - name: Build Linux packages
         run: ./gradlew :desktopApp:packageAppImage :desktopApp:packageDeb --no-daemon
+
+      - name: Archive portable app image
+        # packageAppImage produces an app-image directory; package it into a
+        # single distributable archive.
+        run: tar -czf musicor-linux-amd64.tar.gz -C desktopApp/build/compose/binaries/main/app .
+
+      - name: Build AppImage
+        # Convert the app-image directory into a real single-file AppImage.
+        run: |
+          set -e
+          curl -fL --http1.1 --retry 3 -o /tmp/appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          STAGE="$PWD/build/appimage-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          cp -r desktopApp/build/compose/binaries/main/app/com.regtho.musicor/. "$STAGE"/
+          cp media/logo.png "$STAGE/musicor.png"
+          ln -s musicor.png "$STAGE/.DirIcon"
+          printf '[Desktop Entry]\nName=Musicor\nComment=Local music player\nExec=bin/com.regtho.musicor\nIcon=musicor\nType=Application\nCategories=AudioVideo;Audio;Player;\nTerminal=false\n' \
+            > "$STAGE/musicor.desktop"
+          APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 \
+            /tmp/appimagetool --appimage-extract-and-run -n "$STAGE" "$PWD/musicor-linux-amd64.AppImage"
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
           name: musicor-linux
           path: |
-            desktopApp/build/compose/binaries/main/**/*.AppImage
-            desktopApp/build/compose/binaries/main/**/*.deb
+            musicor-linux-amd64.AppImage
+            musicor-linux-amd64.tar.gz
+            desktopApp/build/compose/binaries/main/deb/*.deb
 
   windows:
     name: Windows EXE

@@ -29,6 +29,8 @@ compose.desktop {
                 *when {
                     osName.contains("windows") -> listOf(TargetFormat.Exe)
                     osName.contains("mac") -> listOf(TargetFormat.Dmg)
+                    // packageAppImage produces the portable app-image directory,
+                    // which build-all.sh / CI archive into a tar.gz.
                     else -> listOf(TargetFormat.Deb, TargetFormat.AppImage)
                 }.toTypedArray(),
             )

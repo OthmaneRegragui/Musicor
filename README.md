@@ -38,7 +38,7 @@ Point it at a folder of MP3s or WAVs and it builds a searchable, playable librar
 | Platform | Minimum | Status |
 |---|---|---|
 | Android | 6.0 (API 23) | Full support |
-| Linux | Any desktop with a GUI | Full support (AppImage / deb) |
+| Linux | Any desktop with a GUI | Full support (AppImage / deb / portable archive) |
 | Windows | 10 | Full support (EXE installer) |
 | macOS | 11 | Best effort (dmg, not regularly tested) |
 | iOS | 15 | In progress (interface only, playback not yet implemented) |
@@ -52,14 +52,17 @@ Ready-to-use packages are produced by the GitHub Actions workflow on every push,
 | Package | Platform | Install |
 |---|---|---|
 | **APK** | Android | Enable "Install unknown apps", then open the APK file. Release builds are unsigned - add a `signingConfig` for Play Store distribution. |
-| **AppImage** | Linux | `chmod +x Musicor-1.0.0.AppImage && ./Musicor-1.0.0.AppImage` - runs on any distro, no installation. |
+| **AppImage** | Linux | `chmod +x musicor-linux-amd64.AppImage && ./musicor-linux-amd64.AppImage` - single file, no installation (needs FUSE; without it run `./musicor-linux-amd64.AppImage --appimage-extract-and-run`). |
+| **tar.gz** | Linux | Portable app image: `tar -xzf musicor-linux-amd64.tar.gz && ./com.regtho.musicor/bin/com.regtho.musicor` - no FUSE required, no installation. |
 | **deb** | Linux (Debian/Ubuntu) | `sudo apt install ./your-musicor.deb` |
 | **EXE** | Windows | Run the installer produced by jpackage (built on a Windows runner; jpackage cannot cross-build). |
 
 Notes:
 
 - Desktop packaging picks formats per build OS in `desktopApp/build.gradle.kts`
-  (Linux: AppImage + deb, Windows: EXE, macOS: dmg), so each CI job builds only what its runner supports.
+  (Linux: deb + app image, Windows: EXE, macOS: dmg), so each CI job builds only what its runner supports.
+- On Linux, `packageAppImage` produces an app-image *directory* (a bundle with its own JRE); `build-all.sh` and the CI
+  workflow convert it into a real single-file AppImage with `appimagetool`, and also archive it as `tar.gz`.
 - The Windows build runs fine even though MPRIS is Linux-only: `MprisService` degrades silently when no DBus
   session bus is available.
 
@@ -99,7 +102,7 @@ Artifacts are written under `androidApp/build/outputs/` and `desktopApp/build/co
 - **AndroidX Media** - MediaSession, audio focus, and the playback foreground service.
 - **mp3agic / mp3spi** - tag extraction and MP3 decoding on the JVM.
 - **dbus-java** - MPRIS2 media controls on Linux.
-- **Gradle with version catalogs + GitHub Actions** - build automation for APK, AppImage, deb, and EXE.
+- **Gradle with version catalogs + GitHub Actions** - build automation for APK, Linux AppImage/tar.gz/deb, and EXE.
 
 ## Project structure
 
