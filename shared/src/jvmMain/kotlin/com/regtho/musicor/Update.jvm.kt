@@ -73,7 +73,7 @@ actual suspend fun downloadToFile(
 }
 
 // Keep in sync with packageVersion in desktopApp/build.gradle.kts.
-actual fun currentAppVersion(): String = "1.0.0"
+actual fun currentAppVersion(): String = "1.0.1"
 
 actual fun updateAssetExtensions(): List<String> {
     val os = System.getProperty("os.name").lowercase()

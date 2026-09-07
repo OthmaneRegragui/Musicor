@@ -35,7 +35,7 @@ compose.desktop {
                 }.toTypedArray(),
             )
             packageName = "com.regtho.musicor"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.1"
 
             // dbus-java references com.sun.security.auth.module.UnixSystem from
             // the jdk.security.auth module, which the default trimmed runtime

@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalComposeUiApi::class)
+
 package com.regtho.musicor
 
 import androidx.compose.foundation.clickable
@@ -23,6 +25,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,12 +52,36 @@ import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 @Composable
-fun App(player: PlayerControllerHolder? = null) {
+fun App(
+    player: PlayerControllerHolder? = null,
+    openTrackRequest: Pair<String, Long>? = null,
+) {
     AppTheme {
         val controller = remember { LibraryController() }
         val player = remember(player) { player ?: PlayerControllerHolder() }
         val scope = rememberCoroutineScope()
         var selectedCategoryId by remember { mutableStateOf<String?>(null) }
+        // Deep-linked song to scroll to once its playlist is on screen:
+        // (track path, nonce). The nonce makes repeat clicks re-scroll.
+        var scrollToSong by remember { mutableStateOf<Pair<String, Long>?>(null) }
+
+        // Tap on the playback notification: open the playlist that contains
+        // the current track and scroll to it.
+        LaunchedEffect(openTrackRequest) {
+            val request = openTrackRequest ?: return@LaunchedEffect
+            val category = controller.categoryForPath(request.first)
+            if (category != null) {
+                selectedCategoryId = category.id
+                scrollToSong = request
+            }
+        }
+
+        // System back (Android gesture/hardware back, iOS back swipe) returns
+        // to the library list while a category/playlist page is open; when on
+        // the library itself it falls through to the platform default.
+        BackHandler(enabled = selectedCategoryId != null) {
+            selectedCategoryId = null
+        }
 
         // Check once at startup whether a newer release exists; the dialog
         // offers to download and open it. Silent when offline or up to date.
@@ -134,6 +162,7 @@ fun App(player: PlayerControllerHolder? = null) {
                         player = player,
                         scope = scope,
                         onBack = { selectedCategoryId = null },
+                        scrollToSong = scrollToSong,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding),

@@ -8,6 +8,8 @@ import java.awt.Frame
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.io.ByteArrayInputStream
+import java.util.Random
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
@@ -351,13 +353,14 @@ private fun is16BitLittleEndianPcm(format: AudioFormat): Boolean =
  * in real time (a self-test skips null sinks that swallow audio silently),
  * and the plain default line as a last resort.
  */
-private fun openBestSink(format: AudioFormat): PcmSink {
+private fun openBestSink(format: AudioFormat): PcmSink? {
     if (isLinux() && is16BitLittleEndianPcm(format) && pacatAvailable) {
         return PacatSink(format)
     }
     javaSink(format)?.let { return it }
-    val line = AudioSystem.getSourceDataLine(format)
-    return JavaLineSink(line)
+    // No mixer accepts the format: returning null lets the caller retry with
+    // a dithered 16-bit downmix instead of crashing playback.
+    return runCatching { AudioSystem.getSourceDataLine(format) }.getOrNull()?.let(::JavaLineSink)
 }
 
 private fun javaSink(format: AudioFormat): PcmSink? {
@@ -392,6 +395,121 @@ private fun javaSink(format: AudioFormat): PcmSink? {
         runCatching { candidate.close() }
     }
     return null
+}
+
+/**
+ * Downmixes decoded PCM of any depth/endianness (including float) to 16-bit
+ * little-endian, applying triangular dithering so the quantization error of
+ * the final 16-bit step becomes noise instead of signal-correlated
+ * distortion (silent truncation is audibly harsher).
+ *
+ * Used when no output line accepts the decoded depth, e.g. a 24-bit FLAC on
+ * a 16-bit-only device: the track still plays, cleanly. 16-bit little-endian
+ * input passes through untouched, which covers MP3/WAV/FLAC 16-bit music.
+ */
+internal fun ditherTo16Bit(decoded: AudioInputStream): AudioInputStream {
+    val format = decoded.format
+    if (format.encoding == AudioFormat.Encoding.PCM_SIGNED &&
+        format.sampleSizeInBits == 16 && !format.isBigEndian
+    ) {
+        return decoded
+    }
+    return Dithered16BitStream(decoded)
+}
+
+private class Dithered16BitStream(
+    private val source: AudioInputStream,
+) : AudioInputStream(
+    ByteArrayInputStream(ByteArray(0)),
+    AudioFormat(
+        AudioFormat.Encoding.PCM_SIGNED,
+        source.format.sampleRate,
+        16,
+        source.format.channels,
+        source.format.channels * 2,
+        source.format.sampleRate,
+        false,
+    ),
+    -1L,
+) {
+    private val srcFormat = source.format
+    private val srcFrameSize = maxOf(1, srcFormat.frameSize)
+    private val outFrameSize = srcFormat.channels * 2
+    private val bytesPerSample = srcFormat.sampleSizeInBits / 8
+    private val float = srcFormat.encoding == AudioFormat.Encoding.PCM_FLOAT
+    // Bits dropped in the final step; float samples are pre-scaled, no shift.
+    private val shift = if (float) 0 else maxOf(0, srcFormat.sampleSizeInBits - 16)
+    private val random = Random()
+
+    override fun read(): Int = -1
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (len < outFrameSize) return 0
+        val frames = len / outFrameSize
+        val buf = ByteArray(frames * srcFrameSize)
+        val got = source.read(buf)
+        if (got <= 0) return -1
+        val gotFrames = got / srcFrameSize
+        for (f in 0 until gotFrames) {
+            val base = f * srcFrameSize
+            for (ch in 0 until srcFormat.channels) {
+                val sample = sampleAt(buf, base + ch * bytesPerSample)
+                // Widen the LSB with TPDF noise before rounding down.
+                val dithered = sample + (noise() * (1L shl shift)).toLong()
+                val q = (dithered shr shift).coerceIn(-32768L, 32767L)
+                val out = off + f * outFrameSize + ch * 2
+                b[out] = (q and 0xFF).toByte()
+                b[out + 1] = ((q shr 8) and 0xFF).toByte()
+            }
+        }
+        return gotFrames * outFrameSize
+    }
+
+    /** One signed sample in the source's full depth (float scaled to 16-bit range). */
+    private fun sampleAt(buf: ByteArray, at: Int): Long {
+        if (float) {
+            val bits = if (bytesPerSample >= 4) readInt(buf, at) else (readShort(buf, at) shl 16)
+            val value = Float.fromBits(bits.toInt())
+            return (value * 32768.0).toLong().coerceIn(-(1L shl 31), (1L shl 31) - 1)
+        }
+        var v = when (bytesPerSample) {
+            3 -> readInt24(buf, at)
+            4 -> readInt(buf, at)
+            else -> readShort(buf, at)
+        }
+        return v
+    }
+
+    /** Triangular distribution in (-1, 1): the standard TPDF dither source. */
+    private fun noise(): Double = random.nextDouble() - random.nextDouble()
+
+    private fun readShort(buf: ByteArray, at: Int): Long {
+        val lo = buf[at].toInt() and 0xFF
+        val hi = buf[at + 1].toInt() and 0xFF
+        val v = if (srcFormat.isBigEndian) (hi shl 8) or lo else (lo shl 8) or hi
+        return ((v shl 16) shr 16).toLong()
+    }
+
+    private fun readInt24(buf: ByteArray, at: Int): Long {
+        val b0 = buf[at].toInt() and 0xFF
+        val b1 = buf[at + 1].toInt() and 0xFF
+        val b2 = buf[at + 2].toInt() and 0xFF
+        val v = if (srcFormat.isBigEndian) {
+            (b0 shl 16) or (b1 shl 8) or b2
+        } else {
+            (b2 shl 16) or (b1 shl 8) or b0
+        }
+        return ((v shl 8) shr 8).toLong()
+    }
+
+    private fun readInt(buf: ByteArray, at: Int): Long {
+        var v = 0L
+        for (i in 0 until 4) {
+            val b = buf[at + i].toLong() and 0xFF
+            v = if (srcFormat.isBigEndian) (v shl 8) or b else v or (b shl (8 * i))
+        }
+        return (v shl 32) shr 32
+    }
 }
 
 actual class PlayerController actual constructor() {
@@ -433,12 +551,13 @@ actual class PlayerController actual constructor() {
     actual val currentArtist: String?
         get() = queue.getOrNull(currentIndex)?.artist
 
-    /** Reuses the open sink while the track format stays the same. */
-    private fun sinkFor(format: AudioFormat): PcmSink {
+    /** Reuses the open sink while the track format stays the same. Returns
+     *  null when no output line accepts [format]. */
+    private fun sinkFor(format: AudioFormat): PcmSink? {
         val current = line
         if (current != null && lineFormat == format) return current
         releaseLine()
-        val fresh = openBestSink(format)
+        val fresh = runCatching { openBestSink(format) }.getOrNull() ?: return null
         line = fresh
         lineFormat = format
         return fresh
@@ -582,20 +701,38 @@ actual class PlayerController actual constructor() {
                 pendingSeekMs = -1L
             }
             val path = queue.getOrNull(currentIndex)?.path ?: break
-            var decoded: AudioInputStream? = null
+            var decoded: AudioInputStream = openDecodedStream(path)
+            // Duration comes from the raw decoder (frame count / rate), so a
+            // later depth conversion cannot lose it.
+            val sourceFrameLength = decoded.frameLength.takeIf { it > 0 } ?: 0L
             var currentLine: PcmSink? = null
             try {
-                decoded = openDecodedStream(path)
-                val format = decoded.format
+                var format = decoded.format
                 streamFormat = format
-                streamFrameLength = decoded.frameLength.takeIf { it > 0 } ?: 0L
-                streamDurationMs = streamDurationFor(streamFrameLength, format, path)
+                streamFrameLength = sourceFrameLength
+                streamDurationMs = streamDurationFor(sourceFrameLength, format, path)
+                var sink = sinkFor(format)
+                if (sink == null) {
+                    // No output line accepts this bit depth (e.g. 24-bit on a
+                    // 16-bit-only device): downmix to 16-bit with dithering so
+                    // the track still plays instead of dying or truncating
+                    // silently with distortion.
+                    decoded = ditherTo16Bit(decoded)
+                    format = decoded.format
+                    streamFormat = format
+                    streamDurationMs = streamDurationFor(sourceFrameLength, format, path)
+                    sink = sinkFor(format)
+                }
+                if (sink == null) {
+                    System.err.println("Musicor: no audio output available for \"$path\".")
+                    break
+                }
                 playedBytes = msToBytes(skipToMs, format)
                 skipToMs = 0L
                 if (playedBytes > 0) {
                     skipPcm(decoded, playedBytes)
                 }
-                currentLine = sinkFor(format)
+                currentLine = sink
                 currentLine.start()
                 line = currentLine
                 onStateChanged?.invoke()
@@ -626,7 +763,7 @@ actual class PlayerController actual constructor() {
                 break
             } finally {
                 // Keep the sink open: consecutive tracks reuse it.
-                runCatching { decoded?.close() }
+                runCatching { decoded.close() }
             }
 
             if (generation != gen || manualStop) break

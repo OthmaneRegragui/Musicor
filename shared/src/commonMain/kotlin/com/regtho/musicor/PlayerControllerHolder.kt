@@ -63,6 +63,12 @@ class PlayerControllerHolder(private val controller: PlayerController = PlayerCo
     }
 
     fun play(song: Song, queue: List<Song>) {
+        // Tapping the current track toggles play/pause in place: no restart,
+        // and the playhead position is preserved.
+        if (currentPath == song.path) {
+            togglePlayPause()
+            return
+        }
         this.queue = queue
         val playable = queue.map {
             PlayableItem(

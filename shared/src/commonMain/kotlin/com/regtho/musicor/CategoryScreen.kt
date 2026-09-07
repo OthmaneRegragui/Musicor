@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -21,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,8 +44,19 @@ fun CategoryScreen(
     scope: CoroutineScope,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    scrollToSong: Pair<String, Long>? = null,
 ) {
     var editingSong by remember { mutableStateOf<Song?>(null) }
+    val listState = rememberLazyListState()
+
+    // Deep link from the playback notification: scroll the list to the
+    // requested track once this playlist is on screen. The nonce in the pair
+    // makes repeated taps on the same song re-scroll.
+    LaunchedEffect(scrollToSong) {
+        val request = scrollToSong ?: return@LaunchedEffect
+        val index = category.songs.indexOfFirst { it.path == request.first }
+        if (index >= 0) listState.animateScrollToItem(index)
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -96,6 +109,7 @@ fun CategoryScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = PaddingValues(bottom = 16.dp),
             ) {
                 items(category.songs, key = { it.path }) { song ->

@@ -15,12 +15,15 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -46,6 +49,7 @@ class MediaPlaybackService : Service() {
         const val ACTION_PREVIOUS = "com.regtho.musicor.action.PREVIOUS"
         const val ACTION_STOP = "com.regtho.musicor.action.STOP"
         const val ACTION_SEEK = "com.regtho.musicor.action.SEEK"
+        const val EXTRA_OPEN_TRACK = "openTrack"
 
         private const val EXTRA_PATHS = "paths"
         private const val EXTRA_TITLES = "titles"
@@ -55,6 +59,7 @@ class MediaPlaybackService : Service() {
         private const val EXTRA_POSITION = "position"
         private const val CHANNEL_ID = "musicor_playback"
         private const val NOTIFICATION_ID = 1
+        private const val TAG = "MusicorPlayback"
 
         // Session persistence (survives a process kill so START_STICKY can
         // bring playback back when the app is running in the background).
@@ -141,6 +146,12 @@ class MediaPlaybackService : Service() {
     }
 
     private var player: MediaPlayer? = null
+
+    // MediaPlayer throws -38 (invalid operation) if getDuration/getCurrentPosition
+    // are called before the PREPARED state, e.g. right after prepareAsync().
+    // All position/duration reads are gated on this flag.
+    @Volatile
+    private var playerPrepared = false
     private var paths: List<String> = emptyList()
     private var titles: List<String> = emptyList()
     private var artists: List<String> = emptyList()
@@ -149,6 +160,33 @@ class MediaPlaybackService : Service() {
     private var pendingResumePosition: Long = -1L
     private var mediaSession: MediaSessionCompat? = null
     private var audioFocusRequest: AudioFocusRequestCompat? = null
+
+    // While a track is playing, the seek bar needs the position refreshed a
+    // few times per second: MediaPlayer only reports it on demand, so a small
+    // ticker publishes it (and nudges subscribers) until playback pauses.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var positionTickerRunning = false
+    private val positionTick = object : Runnable {
+        override fun run() {
+            val mp = player
+            if (mp != null && playerPrepared && mp.isPlaying) {
+                currentPositionMillis = mp.currentPosition.toLong()
+                stateListener?.invoke()
+            }
+            if (positionTickerRunning) mainHandler.postDelayed(this, 500L)
+        }
+    }
+
+    private fun startPositionTicker() {
+        if (positionTickerRunning) return
+        positionTickerRunning = true
+        mainHandler.post(positionTick)
+    }
+
+    private fun stopPositionTicker() {
+        positionTickerRunning = false
+        mainHandler.removeCallbacks(positionTick)
+    }
     private val notificationManager: NotificationManager
         get() = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val audioManager: AudioManager
@@ -329,16 +367,32 @@ class MediaPlaybackService : Service() {
                     pendingResumePosition = -1L
                 }
                 if (autoPlay) it.start()
+                // Only now does the framework accept position/duration reads.
+                playerPrepared = true
+                if (autoPlay) startPositionTicker()
                 notifyStateChanged()
             }
             mp.setOnCompletionListener { onTrackCompleted() }
-            mp.setOnErrorListener { _, _, _ ->
-                onTrackCompleted()
+            // A decode/IO failure is NOT the end of the track. Do not advance
+            // here: treating errors as completion made a single broken track
+            // race through the whole queue with no audio (the skip-storm this
+            // app used to hit on Android). Stop quietly and keep the state
+            // visible so the user can pick another track.
+            mp.setOnErrorListener { failed, what, extra ->
+                if (player === failed) player = null
+                playerPrepared = false
+                runCatching { failed.reset() }
+                runCatching { failed.release() }
+                currentIsPlaying = false
+                currentPositionMillis = 0L
+                Log.w(TAG, "Playback error at index $currentIndex (${path.takeLast(60)}): ${describeMediaError(what, extra)}")
+                notifyStateChanged()
                 true
             }
             mp.prepareAsync()
             player = mp
-        } catch (_: Exception) {
+        } catch (ex: Exception) {
+            Log.w(TAG, "Could not start track at index $index (${path.takeLast(60)}): $ex")
             releasePlayer()
         }
         notifyStateChanged()
@@ -348,10 +402,12 @@ class MediaPlaybackService : Service() {
         val mp = player ?: return
         if (!requestAudioFocus()) return
         runCatching { mp.start() }
+        startPositionTicker()
         notifyStateChanged()
     }
 
     private fun pauseCurrent() {
+        stopPositionTicker()
         val mp = player ?: return
         runCatching { mp.pause() }
         abandonAudioFocus()
@@ -359,6 +415,9 @@ class MediaPlaybackService : Service() {
     }
 
     private fun toggle() {
+        // isPlaying is only valid after the player is prepared; until then a
+        // toggle is a no-op (the track is still loading).
+        if (!playerPrepared) return
         val mp = player ?: return
         if (mp.isPlaying) {
             pauseCurrent()
@@ -395,12 +454,39 @@ class MediaPlaybackService : Service() {
     }
 
     private fun releasePlayer() {
+        stopPositionTicker()
         val current = player
         player = null
+        playerPrepared = false
         if (current != null) {
-            runCatching { current.stop() }
+            // stop() throws when the player is idle/error; work from the
+            // current state and always end on reset()+release().
+            runCatching { if (current.isPlaying) current.stop() }
+            runCatching { current.reset() }
             runCatching { current.release() }
         }
+    }
+
+    /** Turns MediaPlayer error codes into readable diagnostics. */
+    private fun describeMediaError(what: Int, extra: Int): String {
+        val w = when (what) {
+            MediaPlayer.MEDIA_ERROR_UNKNOWN -> "UNKNOWN"
+            else -> "what=$what"
+        }
+        val e = when (extra) {
+            MediaPlayer.MEDIA_ERROR_IO -> "IO (unreadable/denied)"
+            MediaPlayer.MEDIA_ERROR_MALFORMED -> "MALFORMED"
+            MediaPlayer.MEDIA_ERROR_UNSUPPORTED -> "UNSUPPORTED (codec)"
+            MediaPlayer.MEDIA_ERROR_TIMED_OUT -> "TIMED_OUT"
+            else -> "extra=$extra"
+        }
+        val hint = when (extra) {
+            MediaPlayer.MEDIA_ERROR_IO, MediaPlayer.MEDIA_ERROR_TIMED_OUT ->
+                "Re-pick the music folder to refresh access."
+            else ->
+                "Check the file and whether the device supports its codec."
+        }
+        return "[what=$w, extra=$e] $hint"
     }
 
     // -- Audio focus ----------------------------------------------------------
@@ -432,14 +518,15 @@ class MediaPlaybackService : Service() {
             clearPersistedState()
             return
         }
+        val mp = if (playerPrepared) player else null
         prefs.edit()
             .putString(KEY_PATHS, paths.joinToString(SEPARATOR))
             .putString(KEY_TITLES, titles.joinToString(SEPARATOR))
             .putString(KEY_ARTISTS, artists.joinToString(SEPARATOR))
             .putString(KEY_ART_REFS, artRefs.joinToString(SEPARATOR))
             .putInt(KEY_INDEX, currentIndex)
-            .putLong(KEY_POSITION, player?.currentPosition?.toLong() ?: 0L)
-            .putBoolean(KEY_PLAYING, player?.isPlaying == true)
+            .putLong(KEY_POSITION, mp?.currentPosition?.toLong() ?: 0L)
+            .putBoolean(KEY_PLAYING, mp?.isPlaying == true)
             .putBoolean(KEY_LOOP, loopEnabled)
             .apply()
     }
@@ -494,8 +581,10 @@ class MediaPlaybackService : Service() {
 
     private fun notifyStateChanged() {
         currentTrackPath = paths.getOrNull(currentIndex)
-        currentIsPlaying = player?.isPlaying == true
-        val mp = player
+        // Never query the player before it is prepared: the framework throws
+        // -38 (invalid operation) for getDuration/getCurrentPosition then.
+        val mp = if (playerPrepared) player else null
+        currentIsPlaying = mp?.isPlaying == true
         currentPositionMillis = mp?.currentPosition?.toLong() ?: 0L
         currentDurationMillis = mp?.duration?.toLong()?.takeIf { it > 0 } ?: 0L
         currentTitle = titles.getOrNull(currentIndex) ?: ""
@@ -511,14 +600,17 @@ class MediaPlaybackService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val playing = player?.isPlaying == true
+        val playing = if (playerPrepared) player?.isPlaying == true else false
         val title = titles.getOrNull(currentIndex) ?: ""
         val artist = artists.getOrNull(currentIndex) ?: ""
 
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
-            packageManager.getLaunchIntentForPackage(packageName),
+            // Tapping the notification deep-links the app to the playing
+            // song's playlist, scrolled to the current track.
+            (packageManager.getLaunchIntentForPackage(packageName) ?: Intent(Intent.ACTION_MAIN).setPackage(packageName))
+                .putExtra(EXTRA_OPEN_TRACK, currentTrackPath),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val prevIntent = actionIntent(1, ACTION_PREVIOUS)
@@ -590,6 +682,9 @@ class MediaPlaybackService : Service() {
                 .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, artist)
                 .build(),
         )
+        val mp = if (playerPrepared) player else null
+        val playing = mp?.isPlaying == true
+        val position = mp?.currentPosition?.toLong() ?: 0L
         val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
             PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
             PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_SEEK_TO
@@ -597,10 +692,10 @@ class MediaPlaybackService : Service() {
             PlaybackStateCompat.Builder()
                 .setActions(actions)
                 .setState(
-                    if (player?.isPlaying == true) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                    player?.currentPosition?.toLong() ?: 0L,
+                    if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                    position,
                     1f,
-                    if (player?.isPlaying == true) SystemClock.elapsedRealtime() else 0L,
+                    if (playing) SystemClock.elapsedRealtime() else 0L,
                 )
                 .build(),
         )
