@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds every platform artifact this machine can produce and copies the
-# results into a single ./dist folder (gitignored).
+# results into a single ./dist folder (tracked in the repository).
 #
 # - Android: release + debug APK
 # - Desktop: packages for the current OS

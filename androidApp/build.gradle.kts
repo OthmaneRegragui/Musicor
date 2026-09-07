@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.androidApplication)
@@ -42,6 +43,27 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Sign the release APK so it is installable. Use a real keystore
+            // when keystore.properties is present, otherwise fall back to the
+            // debug key (fine for personal builds; do not ship to stores).
+            val props = Properties()
+            val propsFile = rootProject.file("keystore.properties")
+            if (propsFile.exists()) {
+                propsFile.inputStream().use(props::load)
+            }
+            val store = props.getProperty("storeFile")
+                ?.let { rootProject.file(it) }
+                ?.takeIf { it.exists() }
+            if (store != null) {
+                signingConfig = signingConfigs.create("release") {
+                    storeFile = store
+                    storePassword = props.getProperty("storePassword")
+                    keyAlias = props.getProperty("keyAlias")
+                    keyPassword = props.getProperty("keyPassword")
+                }
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {

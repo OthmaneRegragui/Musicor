@@ -67,7 +67,7 @@ Ready-to-use packages are listed in [Downloads](#downloads) above. Install comma
 
 | Package | Platform | Install |
 |---|---|---|
-| **APK** | Android | `musicor-android.apk` - enable "Install unknown apps", then open the APK file. Release builds are unsigned - add a `signingConfig` for Play Store distribution. |
+| **APK** | Android | `musicor-android.apk` - enable "Install unknown apps", then open the APK file. The release APK is signed (debug key by default); set up `keystore.properties` for store distribution, see `androidApp/build.gradle.kts`. |
 | **AppImage** | Linux | `musicor-linux-amd64.AppImage` - `chmod +x musicor-linux-amd64.AppImage && ./musicor-linux-amd64.AppImage`; single file, no installation (needs FUSE; without it run `./musicor-linux-amd64.AppImage --appimage-extract-and-run`). |
 | **tar.gz** | Linux | `musicor-linux-amd64.tar.gz` - portable app image (no FUSE needed): `tar -xzf musicor-linux-amd64.tar.gz && ./com.regtho.musicor/bin/com.regtho.musicor`. |
 | **deb** | Linux (Debian/Ubuntu) | `com.regtho.musicor_1.0.0_amd64.deb` - `sudo apt install ./com.regtho.musicor_1.0.0_amd64.deb`; installs a launcher in the app menu. |
