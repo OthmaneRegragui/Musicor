@@ -68,6 +68,15 @@ Categories=AudioVideo;Audio;Player;
 Terminal=false
 EOF
 
+  # The AppImage runtime executes AppRun; appimagetool does not generate it.
+  cat > "$stage/AppRun" <<'EOF'
+#!/bin/sh
+SELF="$(readlink -f "$0")"
+HERE="$(dirname "$SELF")"
+exec "$HERE/bin/com.regtho.musicor" "$@"
+EOF
+  chmod +x "$stage/AppRun"
+
   echo "==> Building AppImage"
   APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 \
     "$tool" --appimage-extract-and-run -n "$stage" "$PWD/$DIST_DIR/musicor-linux-amd64.AppImage" || return 1
@@ -80,10 +89,11 @@ echo "==> Building Android APKs (release + debug)"
 if [ -n "$DESKTOP_TASKS" ]; then
   echo "==> Building desktop packages"
   # Not fatal: hosts without jpackage/dpkg-deb will fail here; any artifacts
-  # that were produced are still collected below.
+  # that were produced are still collected below. --continue keeps sibling
+  # tasks (e.g. packageAppImage) running when one package task fails.
   # Intended word splitting of the task list.
   # shellcheck disable=SC2086
-  "$GRADLEW" $DESKTOP_TASKS --console=plain || echo "Warning: desktop packaging failed; keeping whatever was built."
+  "$GRADLEW" --continue $DESKTOP_TASKS --console=plain || echo "Warning: desktop packaging failed; keeping whatever was built."
 fi
 
 echo "==> Collecting artifacts into ./$DIST_DIR"

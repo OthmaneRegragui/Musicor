@@ -36,6 +36,11 @@ compose.desktop {
             )
             packageName = "com.regtho.musicor"
             packageVersion = "1.0.0"
+
+            // dbus-java references com.sun.security.auth.module.UnixSystem from
+            // the jdk.security.auth module, which the default trimmed runtime
+            // image omits; without it MPRIS crashes on startup.
+            includeAllModules = true
         }
     }
 }
