@@ -55,6 +55,14 @@ fun App(player: PlayerControllerHolder? = null) {
         val scope = rememberCoroutineScope()
         var selectedCategoryId by remember { mutableStateOf<String?>(null) }
 
+        // Check once at startup whether a newer release exists; the dialog
+        // offers to download and open it. Silent when offline or up to date.
+        var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+        var updateState by remember { mutableStateOf<UpdateDownloadState>(UpdateDownloadState.Idle) }
+        LaunchedEffect(Unit) {
+            updateInfo = runCatching { UpdateChecker().check(currentAppVersion()) }.getOrNull()
+        }
+
         // Reload the last session without auto-playing; pressing play resumes
         // from where the previous track left off.
         LaunchedEffect(Unit) {
@@ -142,6 +150,34 @@ fun App(player: PlayerControllerHolder? = null) {
                     )
                 }
             }
+        }
+
+        val info = updateInfo
+        if (info != null) {
+            UpdateDialog(
+                update = info,
+                state = updateState,
+                onDismiss = {
+                    updateInfo = null
+                    updateState = UpdateDownloadState.Idle
+                },
+                onDownload = {
+                    val asset = info.asset ?: return@UpdateDialog
+                    scope.launch {
+                        updateState = UpdateDownloadState.Downloading(0, asset.sizeBytes)
+                        val path = runCatching {
+                            downloadToFile(asset.url, asset.fileName) { downloaded, total ->
+                                updateState = UpdateDownloadState.Downloading(downloaded, total)
+                            }
+                        }.getOrNull()
+                        updateState = if (path != null) {
+                            UpdateDownloadState.Opening
+                        } else {
+                            UpdateDownloadState.Failed("could not download the update (network or storage).")
+                        }
+                    }
+                },
+            )
         }
     }
 }

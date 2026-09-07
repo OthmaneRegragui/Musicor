@@ -31,6 +31,7 @@ Point it at a folder of MP3s or WAVs and it builds a searchable, playable librar
 - **Background playback (Android)** - audio keeps playing with the screen off, backed by a foreground service, wake lock, and proper audio-focus handling.
 - **Media controls everywhere** - notification and lock-screen controls on Android, MPRIS2 integration for GNOME/KDE on desktop.
 - **Picks up where you stopped** - the current song and position survive app restarts.
+- **Self-update** - on startup, checks the GitHub releases of this repo and offers to download the new package in-app (APK on Android, AppImage / deb / EXE / dmg on desktop).
 - **Kind to old hardware** - Android 6.0 (API 23) and up, small memory footprint with an 8 MB bounded cover-art cache.
 
 ## Platforms
@@ -43,19 +44,35 @@ Point it at a folder of MP3s or WAVs and it builds a searchable, playable librar
 | macOS | 11 | Best effort (dmg, not regularly tested) |
 | iOS | 15 | In progress (interface only, playback not yet implemented) |
 
+## Downloads
+
+Artifacts for the current version are tracked in `dist/`, right in this repository. To rebuild them yourself,
+run `./build-all.sh` - only what is built on the current host is listed below (version from `packageVersion`
+in `desktopApp/build.gradle.kts`).
+
+| Version | Android APK | Linux AppImage | Linux tar.gz |
+|---|---|---|---|
+| **v1.0.0** | [musicor-android.apk](dist/musicor-android.apk) | [musicor-linux-amd64.AppImage](dist/musicor-linux-amd64.AppImage) | [musicor-linux-amd64.tar.gz](dist/musicor-linux-amd64.tar.gz) |
+
+Formats not built on the current host (deb, Windows EXE, macOS dmg) are produced on their native runners - grab them
+from the [GitHub Actions](https://github.com/OthmaneRegragui/Musicor/actions/workflows/build.yml) artifacts instead.
+
+> **Adding a release:** when you tag a version on GitHub, create a new row above and point each cell at the release
+> asset, which follows `https://github.com/OthmaneRegragui/Musicor/releases/download/<tag>/<file>`.
+
 ## Installation
 
-Ready-to-use packages are produced by the GitHub Actions workflow on every push, pull request, or manual
-`workflow_dispatch` run - grab them from the run's artifact section on GitHub. You can also build everything yourself
-(see [Building from source](#building-from-source)).
+Ready-to-use packages are listed in [Downloads](#downloads) above. Install commands for each format
+(you can also build everything yourself, see [Building from source](#building-from-source)):
 
 | Package | Platform | Install |
 |---|---|---|
-| **APK** | Android | Enable "Install unknown apps", then open the APK file. Release builds are unsigned - add a `signingConfig` for Play Store distribution. |
-| **AppImage** | Linux | `chmod +x musicor-linux-amd64.AppImage && ./musicor-linux-amd64.AppImage` - single file, no installation (needs FUSE; without it run `./musicor-linux-amd64.AppImage --appimage-extract-and-run`). |
-| **tar.gz** | Linux | Portable app image: `tar -xzf musicor-linux-amd64.tar.gz && ./com.regtho.musicor/bin/com.regtho.musicor` - no FUSE required, no installation. |
-| **deb** | Linux (Debian/Ubuntu) | `sudo apt install ./your-musicor.deb` |
-| **EXE** | Windows | Run the installer produced by jpackage (built on a Windows runner; jpackage cannot cross-build). |
+| **APK** | Android | `musicor-android.apk` - enable "Install unknown apps", then open the APK file. Release builds are unsigned - add a `signingConfig` for Play Store distribution. |
+| **AppImage** | Linux | `musicor-linux-amd64.AppImage` - `chmod +x musicor-linux-amd64.AppImage && ./musicor-linux-amd64.AppImage`; single file, no installation (needs FUSE; without it run `./musicor-linux-amd64.AppImage --appimage-extract-and-run`). |
+| **tar.gz** | Linux | `musicor-linux-amd64.tar.gz` - portable app image (no FUSE needed): `tar -xzf musicor-linux-amd64.tar.gz && ./com.regtho.musicor/bin/com.regtho.musicor`. |
+| **deb** | Linux (Debian/Ubuntu) | `com.regtho.musicor_1.0.0_amd64.deb` - `sudo apt install ./com.regtho.musicor_1.0.0_amd64.deb`; installs a launcher in the app menu. |
+| **EXE** | Windows | Build by the Windows CI runner (jpackage needs Windows; it cannot cross-build on Linux) - run the installer, then launch Musicor from the Start menu. |
+| **dmg** | macOS | Build by the macOS CI runner - open the dmg and drag Musicor to Applications. |
 
 Notes:
 
