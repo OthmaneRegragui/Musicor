@@ -20,3 +20,7 @@ node_modules/
 keystore.properties
 *.jks
 *.keystore
+
+# Local build output; releases are built by GitHub Actions and published
+# to GitHub Releases instead of being tracked in the repository.
+dist/

@@ -1,8 +1,9 @@
-name: Build artifacts
+name: Build and release
 
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -13,6 +14,14 @@ jobs:
   android:
     name: Android APK
     runs-on: ubuntu-latest
+    env:
+      # Optional release signing. Set these repository secrets to sign the
+      # release APK with a real keystore; without them the APK falls back to
+      # the debug key (see androidApp/build.gradle.kts).
+      ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +34,35 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build release APK
-        run: ./gradlew :androidApp:assembleRelease --no-daemon
+      - name: Configure release signing (optional)
+        if: env.ANDROID_KEYSTORE != ''
+        run: |
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/musicor.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/musicor.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
 
-      - name: Upload APK
+      - name: Build release and debug APKs
+        run: ./gradlew :androidApp:assembleRelease :androidApp:assembleDebug --no-daemon
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          cp androidApp/build/outputs/apk/release/*release*.apk dist/musicor-android.apk
+          cp androidApp/build/outputs/apk/debug/*debug*.apk dist/musicor-android-debug.apk
+
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: musicor-android-apk
-          path: androidApp/build/outputs/apk/release/*.apk
+          name: musicor-android
+          path: dist/
+          if-no-files-found: error
 
   linux:
-    name: Linux (AppImage + deb)
+    name: Linux (AppImage + deb + tar.gz)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,14 +101,19 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 \
             /tmp/appimagetool --appimage-extract-and-run -n "$STAGE" "$PWD/musicor-linux-amd64.AppImage"
 
+      - name: Collect Linux packages
+        run: |
+          mkdir -p dist
+          cp musicor-linux-amd64.AppImage dist/
+          cp musicor-linux-amd64.tar.gz dist/
+          cp desktopApp/build/compose/binaries/main/deb/*.deb dist/
+
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
           name: musicor-linux
-          path: |
-            musicor-linux-amd64.AppImage
-            musicor-linux-amd64.tar.gz
-            desktopApp/build/compose/binaries/main/deb/*.deb
+          path: dist/
+          if-no-files-found: error
 
   windows:
     name: Windows EXE
@@ -98,8 +130,68 @@ jobs:
       - name: Build EXE
         run: .\gradlew.bat :desktopApp:packageExe --no-daemon
 
+      - name: Collect EXE
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item desktopApp/build/compose/binaries/main/exe/*.exe dist/
+
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: musicor-windows-exe
-          path: desktopApp/build/compose/binaries/main/**/*.exe
+          name: musicor-windows
+          path: dist/
+          if-no-files-found: error
+
+  macos:
+    name: macOS dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build dmg
+        run: ./gradlew :desktopApp:packageDmg --no-daemon
+
+      - name: Collect dmg
+        run: |
+          mkdir -p dist
+          cp desktopApp/build/compose/binaries/main/dmg/*.dmg dist/
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicor-macos
+          path: dist/
+          if-no-files-found: error
+
+  # Runs only when a tag like v1.0.2 is pushed: collects every artifact and
+  # publishes them as a GitHub Release with auto-generated release notes.
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [android, linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

@@ -46,19 +46,20 @@ Point it at a folder of MP3s or WAVs and it builds a searchable, playable librar
 
 ## Downloads
 
-Artifacts for the current version are tracked in `dist/`, right in this repository. To rebuild them yourself,
-run `./build-all.sh` - only what is built on the current host is listed below (version from `packageVersion`
-in `desktopApp/build.gradle.kts`).
+Releases are built automatically by GitHub Actions: every push to `main` produces CI artifacts, and pushing a tag like
+`v1.0.2` publishes a [GitHub Release](https://github.com/OthmaneRegragui/Musicor/releases) with all platform packages
+attached. To build everything on your own machine, run `./build-all.sh` (only artifacts the host OS supports are
+produced; version comes from `packageVersion` in `desktopApp/build.gradle.kts`).
 
 | Version | Android APK | Linux AppImage | Linux tar.gz |
 |---|---|---|---|
-| **v1.0.0** | [musicor-android.apk](dist/musicor-android.apk) | [musicor-linux-amd64.AppImage](dist/musicor-linux-amd64.AppImage) | [musicor-linux-amd64.tar.gz](dist/musicor-linux-amd64.tar.gz) |
+| **v1.0.1** | [musicor-android.apk](https://github.com/OthmaneRegragui/Musicor/releases/download/v1.0.1/musicor-android.apk) | [musicor-linux-amd64.AppImage](https://github.com/OthmaneRegragui/Musicor/releases/download/v1.0.1/musicor-linux-amd64.AppImage) | [musicor-linux-amd64.tar.gz](https://github.com/OthmaneRegragui/Musicor/releases/download/v1.0.1/musicor-linux-amd64.tar.gz) |
 
-Formats not built on the current host (deb, Windows EXE, macOS dmg) are produced on their native runners - grab them
-from the [GitHub Actions](https://github.com/OthmaneRegragui/Musicor/actions/workflows/build.yml) artifacts instead.
+deb, Windows EXE and macOS dmg are attached to the same release.
 
-> **Adding a release:** when you tag a version on GitHub, create a new row above and point each cell at the release
-> asset, which follows `https://github.com/OthmaneRegragui/Musicor/releases/download/<tag>/<file>`.
+> **Cutting a release:** bump the version in `androidApp`/`desktopApp` build scripts, then push a tag
+> (`git tag v1.0.2 && git push origin v1.0.2`). GitHub Actions builds every platform and attaches the artifacts to a new
+> Release automatically - no manual uploads needed.
 
 ## Installation
 
