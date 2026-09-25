@@ -24,3 +24,6 @@ keystore.properties
 # Local build output; releases are built by GitHub Actions and published
 # to GitHub Releases instead of being tracked in the repository.
 dist/
+
+# App-image payload embedded into the portable Windows exe by release.yml.
+tools/portable-sfx/payload.zip
